@@ -44,6 +44,7 @@ use crate::{
         crate::routes::documents::crud::upload_document,
         crate::routes::documents::crud::list_documents,
         crate::routes::documents::crud::get_document_by_id,
+        crate::routes::documents::crud::rename_document,
         crate::routes::documents::crud::delete_document,
         crate::routes::documents::bulk::bulk_delete_documents,
         crate::routes::documents::crud::download_document,
@@ -151,7 +152,7 @@ use crate::{
             Label, CreateLabel, UpdateLabel, LabelAssignment, LabelQuery, LabelBulkUpdateRequest,
             // Document schemas
             BulkDeleteRequest, DocumentListResponse, DocumentOcrResponse, DocumentOperationResponse,
-            BulkDeleteResponse, PaginationInfo, DocumentDuplicatesResponse, crate::routes::documents::RetryOcrRequest,
+            BulkDeleteResponse, PaginationInfo, DocumentDuplicatesResponse, crate::routes::documents::RetryOcrRequest, crate::routes::documents::RenameDocumentRequest,
             // OCR schemas
             crate::routes::ocr::AvailableLanguagesResponse, crate::routes::ocr::LanguageInfo,
             crate::ocr::api::OcrHealthResponse, crate::ocr::api::OcrErrorResponse, crate::ocr::api::OcrRequest,

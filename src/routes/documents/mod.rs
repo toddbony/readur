@@ -1,4 +1,4 @@
-use axum::{routing::{get, post, delete}, Router};
+use axum::{routing::{get, patch, post, delete}, Router};
 use std::sync::Arc;
 use crate::AppState;
 
@@ -23,6 +23,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/", post(upload_document))
         .route("/", get(list_documents))
         .route("/{id}", get(get_document_by_id))
+        .route("/{id}", patch(rename_document))
         .route("/{id}", delete(delete_document))
         .route("/{id}/download", get(download_document))
         .route("/{id}/view", get(view_document))

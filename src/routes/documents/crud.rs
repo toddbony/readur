@@ -385,6 +385,145 @@ pub async fn get_document_by_id(
     Ok(Json(response))
 }
 
+/// Maximum length of a document's display name.
+///
+/// Nothing on disk depends on this. Every upload is stored as `{uuid}.{ext}`
+/// (`services/file_service.rs`), so `filename` and `original_filename` are
+/// display metadata with no path behind them. The bound exists because the value
+/// is echoed into a `Content-Disposition` header on download.
+const MAX_FILENAME_LEN: usize = 255;
+
+/// Validate a caller-supplied display name.
+///
+/// `download_document` interpolates `original_filename` straight into
+/// `Content-Disposition: attachment; filename="..."`. A rename route is a new and
+/// deliberate path for arbitrary strings to reach that header, so quotes,
+/// backslashes and control characters are refused here rather than escaped
+/// later: no legitimate document name needs them, and refusing is easier to
+/// reason about than encoding.
+///
+/// Path separators are refused for the same reason. They cannot escape anything
+/// today, because the stored path derives from a uuid and never from this value
+/// — but that is a property of the current storage layer rather than a promise,
+/// and it costs nothing to avoid depending on it.
+fn validate_display_filename(raw: &str) -> Result<String, String> {
+    let name = raw.trim();
+    if name.is_empty() {
+        return Err("filename must not be empty".to_string());
+    }
+    if name.chars().count() > MAX_FILENAME_LEN {
+        return Err(format!(
+            "filename must be at most {} characters",
+            MAX_FILENAME_LEN
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err("filename must not contain control characters".to_string());
+    }
+    if let Some(bad) = name.chars().find(|c| matches!(c, '"' | '\\' | '/')) {
+        return Err(format!("filename must not contain {:?}", bad));
+    }
+    if name == "." || name == ".." {
+        return Err("filename must not be \".\" or \"..\"".to_string());
+    }
+    Ok(name.to_string())
+}
+
+/// Rename a document.
+///
+/// Updates the display name only. The stored file is untouched: every upload
+/// lives at `{uuid}.{ext}`, neither name column has a unique constraint, and the
+/// full-text index covers `content` and `ocr_text` — so this is a metadata update
+/// with no file move and no reindex.
+///
+/// **One request field updates both `filename` and `original_filename`, on
+/// purpose.** The UI reads `filename`, while `download_document` builds
+/// `Content-Disposition` from `original_filename`. Letting them be set
+/// independently would make it trivial to produce a document that displays under
+/// one name and downloads under another, which is worse than not renaming at
+/// all — so the API does not make that state expressible.
+#[utoipa::path(
+    patch,
+    path = "/api/documents/{id}",
+    tag = "documents",
+    security(
+        ("bearer_auth" = [])
+    ),
+    params(
+        ("id" = uuid::Uuid, Path, description = "Document ID")
+    ),
+    request_body = RenameDocumentRequest,
+    responses(
+        (status = 200, description = "Document renamed", body = DocumentResponse),
+        (status = 400, description = "Invalid filename"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Document not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn rename_document(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path(document_id): Path<uuid::Uuid>,
+    Json(request): Json<RenameDocumentRequest>,
+) -> Result<Json<DocumentResponse>, StatusCode> {
+    let filename = validate_display_filename(&request.filename).map_err(|e| {
+        warn!("Rejected rename of document {}: {}", document_id, e);
+        StatusCode::BAD_REQUEST
+    })?;
+
+    // Authorization. This returns None for a document the caller may not see, so
+    // one 404 covers both "no such document" and "not yours" without
+    // distinguishing them to the caller. Check-then-act matches the surrounding
+    // handlers; the window is not meaningful for a display-name update.
+    state
+        .db
+        .get_document_by_id(document_id, auth_user.user.id, auth_user.user.role)
+        .await
+        .map_err(|e| {
+            error!("Database error getting document {}: {}", document_id, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    sqlx::query(
+        "UPDATE documents SET filename = $2, original_filename = $2, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(document_id)
+    .bind(&filename)
+    .execute(&state.db.pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to rename document {}: {}", document_id, e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    info!("Renamed document {} to '{}'", document_id, filename);
+
+    let document = state
+        .db
+        .get_document_by_id(document_id, auth_user.user.id, auth_user.user.role)
+        .await
+        .map_err(|e| {
+            error!("Database error re-reading document {}: {}", document_id, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let labels = state
+        .db
+        .get_document_labels(document_id)
+        .await
+        .map_err(|e| {
+            error!("Failed to get labels for document {}: {}", document_id, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let mut response = DocumentResponse::from(document);
+    response.labels = labels;
+    Ok(Json(response))
+}
+
 /// List documents with pagination and filtering
 #[utoipa::path(
     get,

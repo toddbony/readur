@@ -27,6 +27,16 @@ pub struct DeleteLowConfidenceRequest {
     pub preview_only: Option<bool>,
 }
 
+/// Body of `PATCH /api/documents/{id}`.
+///
+/// Deliberately one field. See `rename_document` for why `filename` and
+/// `original_filename` cannot be set independently.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct RenameDocumentRequest {
+    /// New display name, e.g. `2026-07 USAA Statement.pdf`.
+    pub filename: String,
+}
+
 #[derive(Deserialize, ToSchema)]
 pub struct RetryOcrRequest {
     pub language: Option<String>,
