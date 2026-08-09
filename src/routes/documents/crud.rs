@@ -14,7 +14,7 @@ use crate::{
     models::DocumentResponse,
     AppState,
 };
-use super::types::{PaginationQuery, DocumentUploadResponse, PaginatedDocumentsResponse, DocumentPaginationInfo};
+use super::types::{PaginationQuery, DocumentUploadResponse, PaginatedDocumentsResponse, DocumentPaginationInfo, RenameDocumentRequest};
 
 /// Custom error type for document operations
 #[derive(Debug)]
