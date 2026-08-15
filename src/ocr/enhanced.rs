@@ -945,34 +945,22 @@ impl EnhancedOcrService {
             ));
         }
 
-        // Check if PDF contains ANY embedded images
-        // If it does, we MUST use image-based OCR to capture content from both text layers AND images
-        let has_images = self.pdf_has_images(file_path).await;
-
-        if has_images {
-            // PDF has images - use image-based OCR to capture EVERYTHING (text + images)
-            info!("PDF '{}' has embedded images, using image-based OCR for comprehensive extraction", file_path);
-
-            if self.is_pdftoppm_available().await {
-                match self.extract_text_from_pdf_via_images(file_path, settings, start_time, progress_callback.clone()).await {
-                    Ok(result) if result.word_count > 0 => {
-                        info!("PDF image-based OCR successful for '{}': {} words", file_path, result.word_count);
-                        return Ok(result);
-                    }
-                    Ok(_) => {
-                        warn!("Image-based OCR returned no words for '{}', falling back to ocrmypdf", file_path);
-                    }
-                    Err(e) => {
-                        warn!("Image-based OCR failed for '{}': {}, falling back to ocrmypdf", file_path, e);
-                    }
-                }
-            }
-
-            // Fallback to ocrmypdf for PDFs with images
-            return self.extract_text_from_pdf_with_ocr(file_path, settings, start_time).await;
-        }
-
-        // No images detected - use fast pdftotext extraction
+        // Try the embedded text layer FIRST, whatever images the PDF also contains.
+        //
+        // This previously short-circuited straight to image-based OCR whenever
+        // `pdf_has_images()` returned true — and that returns true for ANY embedded image,
+        // including a corporate logo. In practice every born-digital PDF from a bank, insurer
+        // or government portal had its perfect text layer discarded and replaced with a
+        // ~89%-confidence tesseract guess: `www.umr.com` read as `www.unr.com`, `20241011B00`
+        // as `20241011800`, plus barcode noise that exists in no source document. Measured on
+        // one real archive, 48 of 49 born-digital documents were affected; the single survivor
+        // was the only file in the set with no logo.
+        //
+        // The fallback below already handles the case this branch was guarding against.
+        // `is_text_extraction_quality_sufficient()` rejects empty text, garbage (alphanumeric
+        // ratio below 30%) and image-based PDFs (low word density), and control then falls
+        // through to pdftoppm + tesseract and finally ocrmypdf. The early branch was not adding
+        // a capability, only pre-empting one.
         let quick_extraction_result = self.extract_pdf_text_quick(file_path).await;
 
         match quick_extraction_result {
