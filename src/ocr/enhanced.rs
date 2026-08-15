@@ -1021,17 +1021,27 @@ impl EnhancedOcrService {
 
         // ALWAYS check alphanumeric ratio first - this catches garbage text regardless of word count
         // This prevents the issue where raw PDF byte extraction produces high word counts but garbage text
+        //
+        // Measured against NON-WHITESPACE characters, not total length. Whitespace is layout,
+        // not content: `pdftotext -layout` reproduces tabular documents by padding columns with
+        // spaces, so a perfectly clean one-page paystub measured 754 alphanumeric of 2,841 total
+        // characters (26.5% — rejected by the old arithmetic) while 90.3% of its NON-SPACE
+        // characters were alphanumeric. Counting whitespace in the denominator makes this gate
+        // unable to tell binary garbage from a sparse table. Binary garbage is still caught:
+        // its non-space characters are symbols, not letters and digits.
         let alphanumeric_chars = text.chars().filter(|c| c.is_alphanumeric()).count();
-        let alphanumeric_ratio = if !text.is_empty() {
-            (alphanumeric_chars as f64) / (text.len() as f64)
+        let non_whitespace_chars = text.chars().filter(|c| !c.is_whitespace()).count();
+        let alphanumeric_ratio = if non_whitespace_chars > 0 {
+            (alphanumeric_chars as f64) / (non_whitespace_chars as f64)
         } else {
             0.0
         };
 
-        // If less than 30% alphanumeric content, likely poor extraction (PDF metadata, binary garbage, etc.)
+        // If less than 30% of non-whitespace content is alphanumeric, likely poor extraction
+        // (PDF metadata, binary garbage, etc.)
         if alphanumeric_ratio < 0.3 {
-            debug!("PDF text has low alphanumeric content: {:.1}% ({} of {} chars) - needs OCR",
-                   alphanumeric_ratio * 100.0, alphanumeric_chars, text.len());
+            debug!("PDF text has low alphanumeric content: {:.1}% ({} of {} non-space chars) - needs OCR",
+                   alphanumeric_ratio * 100.0, alphanumeric_chars, non_whitespace_chars);
             return false;
         }
 
