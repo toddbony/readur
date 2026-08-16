@@ -611,6 +611,66 @@ impl OcrQueueService {
                             filename, item.id, item.document_id, 
                             ocr_result.confidence, ocr_result.word_count, processing_time_ms, ocr_result.preprocessing_applied
                         );
+
+                        // Post-OCR webhook — scanstation patch. Fire-and-forget
+                        // notification that this document's OCR has committed, so
+                        // the downstream classifier can name and label it seconds
+                        // from now instead of on its poll timer.
+                        //
+                        // Read from the environment on purpose, not from Config:
+                        // the fork carries this patch, and one Environment= line
+                        // in the systemd unit is the entire on/off switch. Unset
+                        // means this block costs one env lookup and nothing else.
+                        //
+                        // No retries, 2 s ceiling, result logged at debug and
+                        // dropped: the classifier's poll timer is the backstop
+                        // for every miss, so a delivery guarantee here would buy
+                        // nothing and cost a queue.
+                        if let Ok(webhook_url) = std::env::var("READUR_OCR_WEBHOOK_URL") {
+                            let account = match user_id {
+                                Some(uid) => self
+                                    .db
+                                    .get_user_by_id(uid)
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                    .map(|u| u.username),
+                                None => None,
+                            };
+                            match account {
+                                Some(account) => {
+                                    let document_id = item.document_id;
+                                    tokio::spawn(async move {
+                                        let payload = serde_json::json!({
+                                            "document_id": document_id,
+                                            "account": account,
+                                        });
+                                        let sent = reqwest::Client::new()
+                                            .post(&webhook_url)
+                                            .json(&payload)
+                                            .timeout(std::time::Duration::from_secs(2))
+                                            .send()
+                                            .await;
+                                        match sent {
+                                            Ok(r) => tracing::debug!(
+                                                "ocr webhook for {}: {}",
+                                                document_id,
+                                                r.status()
+                                            ),
+                                            Err(e) => tracing::debug!(
+                                                "ocr webhook for {} failed: {}",
+                                                document_id,
+                                                e
+                                            ),
+                                        }
+                                    });
+                                }
+                                None => tracing::debug!(
+                                    "ocr webhook: no username resolvable for document {}",
+                                    item.document_id
+                                ),
+                            }
+                        }
                     }
                     Err(e) => {
                         let error_msg = format!("OCR extraction failed: {}", e);
